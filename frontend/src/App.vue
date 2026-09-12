@@ -85,13 +85,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import * as d3 from 'd3'
 import { useEtymologyStore, LANGUAGE_FAMILIES } from './store/etymology'
 
 const store = useEtymologyStore()
 const svgRef = ref<SVGSVGElement | null>(null)
 const COLORS: Record<string, string> = { ie: '#3b82f6', st: '#22c55e', aa: '#f59e0b', ural: '#8b5cf6' }
+let highlightSelection: ((id: string | null) => void) | null = null
 
 function drawGraph() {
   if (!svgRef.value) return
@@ -106,7 +107,16 @@ function drawGraph() {
     .force('center', d3.forceCenter(W / 2, H / 2))
     .force('collision', d3.forceCollide(22))
   const g = svg.append('g')
-  svg.call(d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.2, 3]).on('zoom', (e) => g.attr('transform', e.transform)) as any)
+  const zoom = d3.zoom<SVGSVGElement, unknown>()
+    .scaleExtent([0.2, 3])
+    .on('zoom', (e) => g.attr('transform', e.transform))
+    .on('end', (e) => store.saveViewTransform({ x: e.transform.x, y: e.transform.y, k: e.transform.k }))
+  svg.call(zoom)
+  // 恢复上次保存的缩放/平移视角
+  const savedT = store.loadViewTransform()
+  if (savedT) {
+    svg.call(zoom.transform as any, d3.zoomIdentity.translate(savedT.x, savedT.y).scale(savedT.k))
+  }
   const link = g.append('g').selectAll('line').data(links).join('line')
     .attr('stroke', '#475569').attr('stroke-width', 1).attr('opacity', 0.5)
   const node = g.append('g').selectAll('g').data(nodes).join('g')
@@ -115,10 +125,11 @@ function drawGraph() {
       .on('drag', (e, d: any) => { d.fx = e.x; d.fy = e.y })
       .on('end', (e, d: any) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null }))
     .on('click', (_: any, d: any) => { store.selectedNode = d })
-  node.append('circle')
+  const circle = node.append('circle')
     .attr('r', (d: any) => d.language === 'Proto-IE' ? 12 : 7)
     .attr('fill', (d: any) => COLORS[d.family] || '#64748b')
-    .attr('stroke', '#1e293b').attr('stroke-width', 1.5)
+    .attr('stroke', (d: any) => store.selectedNode && d.id === store.selectedNode.id ? '#22d3ee' : '#1e293b')
+    .attr('stroke-width', (d: any) => store.selectedNode && d.id === store.selectedNode.id ? 3 : 1.5)
   node.append('text').attr('dy', -14).attr('text-anchor', 'middle').attr('font-size', 9).attr('fill', '#e2e8f0')
     .text((d: any) => d.word.length > 8 ? d.word.slice(0, 8) + '…' : d.word)
   node.append('title').text((d: any) => `${d.word} (${d.language}): ${d.meaning}`)
@@ -127,7 +138,18 @@ function drawGraph() {
       .attr('x2', (d: any) => d.target.x).attr('y2', (d: any) => d.target.y)
     node.attr('transform', (d: any) => `translate(${d.x},${d.y})`)
   })
+
+  // 选中/取消选中时刷新高亮描边，无需重绘整个图
+  highlightSelection = (id: string | null) => {
+    circle
+      .attr('stroke', (d: any) => id && d.id === id ? '#22d3ee' : '#1e293b')
+      .attr('stroke-width', (d: any) => id && d.id === id ? 3 : 1.5)
+  }
 }
+
+watch(() => store.selectedNode, (sel) => {
+  highlightSelection?.(sel ? sel.id : null)
+})
 
 onMounted(() => { setTimeout(drawGraph, 100) })
 </script>
